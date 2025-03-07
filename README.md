@@ -45,7 +45,7 @@
 
 ## Model and Data Saving Mechanisms
 
-fastANN includes built-in functionalities for saving models, training data, scalers, and hyperparameters to ensure full reproducibility and ease of use.
+fastANN includes built-in functionalities for saving models, training data, scalers, hyperparameters, and learning curves to ensure full reproducibility and ease of use.
 
 ### **Model Saving**
 - During training, the best-performing model (based on the checkpoint monitor metric) is saved automatically.
@@ -65,10 +65,13 @@ fastANN includes built-in functionalities for saving models, training data, scal
   - `2025-03-07 - SCALER FOR ANN MODEL - fastANN.pkl`
   - `2025-03-07 - Y SCALER FOR ANN MODEL - fastANN.pkl`
 
-### **Training History Saving**
+### **Training History and Learning Curves Saving**
 - The training history, including loss and accuracy metrics over epochs, is stored in a `.csv` file.
-- Example filename:
+- Learning curves are saved as plots in `.png` format for easy visualization.
+- Example filenames:
   - `2025-03-07 - TRAINING HISTORY OF ANN MODEL - fastANN.csv`
+  - `2025-03-07 - TRAINING LOSS CURVE - fastANN.png`
+  - `2025-03-07 - TRAINING ACCURACY CURVE - fastANN.png`
 
 ### **Hyperparameters Saving**
 - Hyperparameters are stored as a `.json` file for later reuse.
