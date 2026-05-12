@@ -412,7 +412,7 @@ class fastANN:
 
 
         # compile
-        self.model.compile(optimizer = tensorflow.keras.optimizers.Adam(learning_rate=0.0003),                      
+        self.model.compile(optimizer = tensorflow.keras.optimizers.Adam(learning_rate=self.learning_rate),                      
                          loss = self.loss, 
                          metrics = self.metrics) #['accuracy'])
         
