@@ -33,9 +33,8 @@ import random
 from scipy.signal import find_peaks
 from scipy.signal import argrelmax, argrelmin
 from sklearn.preprocessing import StandardScaler
-from scipy.integrate import simps
+from scipy.integrate import simpson as simps
 from scipy.stats import pearsonr, spearmanr, kendalltau
-from scipy.integrate import simps
 from scipy.signal import savgol_filter
 from scipy.spatial.distance import euclidean
 from scipy.spatial.distance import cdist
@@ -361,25 +360,19 @@ class fastANN:
         print(len(self.X_train_s))
         
         # first layer
-        self.model.add(Dense(self.X_train_s.shape[1] * self.model_relative_width[0] , 
-                             input_shape = (self.X_train_s.shape[1],) #, 
-#                              activation = self.activation
-                            )
-                      )
-        
+        first_layer_width = int(self.X_train_s.shape[1] * self.model_relative_width[0])
         if(self.activation != 'PReLU'):
-            self.model.add(Dense(self.X_train_s.shape[1] * self.model_relative_width[0] , 
-                             input_shape = (self.X_train_s.shape[1],), 
-#                              activation = self.activation
-                            )
-                      )
+            self.model.add(Dense(first_layer_width, 
+                                 input_shape = (self.X_train_s.shape[1],), 
+                                 activation = self.activation
+                                )
+                          )
 
         else:
-            self.model.add(Dense(self.X_train_s.shape[1] * self.model_relative_width[0] , 
-                             input_shape = (self.X_train_s.shape[1],) #, 
-#                              activation = self.activation
-                            )
-                      )
+            self.model.add(Dense(first_layer_width, 
+                                 input_shape = (self.X_train_s.shape[1],)
+                                )
+                          )
             self.model.add(PReLU())
             
         self.model.add(Dropout(self.model_dropout[0]))
@@ -516,7 +509,7 @@ class fastANN:
         self.loss_df.to_csv(self.data_storage_path + training_history_file_name)
                 
         # keep the best model
-        self.model = self.load_model(model_file_name)
+        self.load_model(model_file_name)
         
         # plot history
         self.plot_training_history()
@@ -564,6 +557,8 @@ class fastANN:
             self.model.summary()
         else:
             print("Model is None after loading. Check the loading logic.")
+            
+        return self.model
         
 
         
