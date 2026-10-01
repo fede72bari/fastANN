@@ -18,7 +18,7 @@
 ### Model Architecture Parameters
 | Parameter                  | Description |
 |----------------------------|-------------|
-| `model_relative_width`     | Defines the relative size of each hidden layer compared to the input size. |
+| `model_relative_width`     | List with the width of each **hidden** layer, relative to the number of input features (e.g. `[2, 1]` = two hidden layers with `2 * n_features` and `n_features` units). Input and output layers are added automatically. |
 | `model_dropout`            | List of dropout values for each layer to prevent overfitting. |
 | `activation`               | Activation function for the hidden layers (e.g., 'relu', 'tanh', 'PReLU'). |
 | `last_layer_activation`    | Activation function for the output layer (e.g., 'sigmoid', 'softmax'). |
@@ -30,7 +30,7 @@
 | `loss`                     | Loss function (e.g., 'binary_crossentropy'). |
 | `metrics`                  | List of metrics to track during training (e.g., `['accuracy']`). |
 | `train_size_rate`          | Percentage of data to use for training (default: `0.7`). |
-| `split_type`               | Splitting method: `'random'` or `'sequential'`. |
+| `split_type`               | Splitting method: `'random'` (shuffled, seed 42) or `'sequential'` (first rows for training). In both cases `train_size_rate` is the training fraction. |
 
 ### Early Stopping and Checkpoints
 | Parameter                  | Description |
@@ -65,13 +65,10 @@ fastANN includes built-in functionalities for saving models, training data, scal
   - `2025-03-07 - SCALER FOR ANN MODEL - fastANN.pkl`
   - `2025-03-07 - Y SCALER FOR ANN MODEL - fastANN.pkl`
 
-### **Training History and Learning Curves Saving**
-- The training history, including loss and accuracy metrics over epochs, is stored in a `.csv` file.
-- Learning curves are saved as plots in `.png` format for easy visualization.
-- Example filenames:
+### **Training History Saving**
+- The training history, including loss and metrics over epochs, is stored in a `.csv` file and plotted by `plot_training_history()`.
+- Example filename:
   - `2025-03-07 - TRAINING HISTORY OF ANN MODEL - fastANN.csv`
-  - `2025-03-07 - TRAINING LOSS CURVE - fastANN.png`
-  - `2025-03-07 - TRAINING ACCURACY CURVE - fastANN.png`
 
 ### **Hyperparameters Saving**
 - Hyperparameters are stored as a `.json` file for later reuse.
@@ -81,9 +78,12 @@ fastANN includes built-in functionalities for saving models, training data, scal
 ### **Loading Saved Models and Data**
 To restore a previously trained model with all its settings:
 ```python
-model.load_all("hyperparameters.json")
+model = fastANN()
+model.load_all("2025-03-07 10-00-00 - HYPERPARAMETERS OF ANN MODEL - fastANN.json", file_path_name = "./models/")
 ```
-This function loads the model, scaler, training history, and dataset split, ensuring the same conditions as the original training session.
+This function loads the model, scaler, training history, and dataset split, ensuring the same conditions as the original training session. Files are read from the folder of the JSON (`file_path_name`), so a model folder can be moved or copied to another machine. The single steps are also available as `load_hyperparameters`, `set_hyperparameters`, `load_model`, `load_scaler` and `load_training_history`.
+
+Parameter names, method names and saved files are shared with the sister package `fastLSTM`. Every method has a complete docstring (`help(fastANN.network_training)`).
 
 ---
 
@@ -111,17 +111,26 @@ Generates predictions for input data.
 Evaluates model performance on test data.
 #### **Parameters:**
 - `min_probability` (float): Probability threshold for classification.
-- `output_dict` (bool): If `True`, returns detailed classification metrics.
+- `output_dict` (bool): If `True`, also returns the classification report as a dictionary.
+#### **Returns:**
+- `(filtered_predictions_results_df, predictions_df)` or `(filtered_predictions_results_df, predictions_df, report)`.
+
+### `binary_precision_recall_vs_scoring(n_points=15, plot=True)`
+Precision and recall of class `1` for cutoffs from `n_points / 100` to `0.99`.
+
+### `gradient_feature_importance(feature_names=None)`
+Gradient-based feature importance on the test set.
 
 ### `plot_training_history()`
 Plots the training history of loss and accuracy metrics over epochs.
 #### **Parameters:**
 - None (uses training history stored during model training).
 
-### `load_all(hyperparameters_file_name)`
+### `load_all(hyperparameters_file_name=None, file_path_name=None)`
 Loads a previously saved model, hyperparameters, and dataset splits.
 #### **Parameters:**
-- `hyperparameters_file_name` (str): Path to the JSON file storing hyperparameters.
+- `hyperparameters_file_name` (str): Name of the JSON file storing hyperparameters.
+- `file_path_name` (str, optional): Folder of the saved files.
 
 ---
 
