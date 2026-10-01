@@ -7,7 +7,8 @@ tabular classification, regression and autoencoding.
 
 The package exposes a single class, :class:`fastANN`, whose public API
 (hyperparameter names, method names and saved-file layout) is shared with the
-sister package ``fastLSTM``.
+sister package ``fastLSTM``. The network runs on TensorFlow or PyTorch
+(Keras 3 backends), chosen with the ``backend`` parameter.
 
 Typical workflow
 ----------------
@@ -30,12 +31,16 @@ Typical workflow
 import multiprocessing
 
 # Files Management
+import sys
 import gzip
 import joblib
 import glob
 import csv
 import json
 import os
+
+# Warnings
+import warnings
 
 # Stocks Indicators
 # import talib
@@ -100,16 +105,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
-import tensorflow as tensorflow
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import Dense, Input
-from tensorflow.keras.layers import PReLU
-from tensorflow.keras.layers import Dropout
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler, LambdaCallback
-from tensorflow import keras
-from tensorflow.keras.preprocessing.sequence import TimeseriesGenerator
-from tensorflow.keras.optimizers import SGD
-# from tensorflow.keras.losses import mean_squared_error
+# Keras (TensorFlow or PyTorch backend) is loaded by load_keras, below
 
 
 # Optimization
@@ -137,6 +133,79 @@ import yfinance as yf
 # Financial indicators
 # import talib
 
+
+
+# ---------------------------------------------------------------------------
+#                    Deep learning backend (TensorFlow or PyTorch)
+# ---------------------------------------------------------------------------
+
+# The network is written with Keras 3, which runs on top of TensorFlow or
+# PyTorch. Keras fixes its backend when it is first imported, so it is NOT
+# imported here: it is loaded by the first instance created, with the backend
+# requested by its `backend` parameter (see load_keras).
+SUPPORTED_BACKENDS = ('tensorflow', 'torch')
+
+
+def load_keras(backend = None):
+    """
+    Import Keras 3 with the requested backend and return the module.
+
+    Keras uses one backend per Python process: the first call (usually the
+    first fastLSTM / fastANN instance) fixes it; later calls must ask for the
+    same backend or for ``None``.
+
+    Parameters
+    ----------
+    backend : {'tensorflow', 'torch'}, optional
+        Backend to use. ``None`` keeps the active one, or, if Keras is not
+        loaded yet, uses the ``KERAS_BACKEND`` environment variable
+        (``'tensorflow'`` when it is not set).
+
+    Returns
+    -------
+    module
+        The ``keras`` module.
+
+    Raises
+    ------
+    ValueError
+        If ``backend`` is not supported.
+    RuntimeError
+        If Keras is already running in this process with another backend
+        (restart the Python kernel to change it).
+
+    Examples
+    --------
+    >>> keras = load_keras('torch')
+    >>> keras.backend.backend()
+    'torch'
+    """
+    if((backend is not None) and (backend not in SUPPORTED_BACKENDS)):
+        raise ValueError(f"backend must be one of {SUPPORTED_BACKENDS}, not '{backend}'.")
+
+    if('keras' not in sys.modules):
+        if(backend is not None):
+            os.environ['KERAS_BACKEND'] = backend
+
+        if((os.environ.get('KERAS_BACKEND', 'tensorflow') == 'torch') and ('tensorflow' in sys.modules)):
+            # with some TensorFlow/PyTorch builds, loading the Keras torch backend after TensorFlow crashes Python
+            warnings.warn("TensorFlow is already imported in this process: if Python crashes while loading the "
+                          "PyTorch backend, create the first fastLSTM/fastANN instance (or import torch) before "
+                          "anything that imports TensorFlow.",
+                          RuntimeWarning,
+                          stacklevel = 3)
+
+        import keras
+
+    keras = sys.modules['keras']
+    active_backend = keras.backend.backend()
+
+    if((backend is not None) and (active_backend != backend)):
+        raise RuntimeError(f"Keras is already using the '{active_backend}' backend in this Python process and it "
+                           f"cannot be changed safely: restart the kernel to use '{backend}', or create the instance "
+                           f"with backend = '{active_backend}' (or None).")
+
+    return keras
 
 
 class fastANN:
@@ -252,9 +321,20 @@ class fastANN:
         If ``True`` the targets are scaled too (useful for regression);
         :meth:`model_predict` can then bring predictions back to the
         original scale.
+    backend : {'tensorflow', 'torch'}, optional
+        Deep learning framework that runs the network (through Keras 3).
+        ``None`` (default) keeps the backend already active in the Python
+        process, or uses the ``KERAS_BACKEND`` environment variable
+        (``'tensorflow'`` when it is not set). The backend is fixed for the
+        whole process by the first instance: to change it restart the kernel.
+        Saved models can be reloaded with either backend.
 
     Attributes
     ----------
+    backend : str
+        Active Keras backend (``'tensorflow'`` or ``'torch'``).
+    keras : module
+        The Keras module used by the instance.
     model : keras.Sequential
         The network (rebuilt by :meth:`network_structure_set_compile`,
         replaced by the saved checkpoint after :meth:`network_training`).
@@ -331,9 +411,15 @@ class fastANN:
                  save_X_Y_data = True,
                  data_storage_path="\\cyPredict\\",
                  model_name = 'ANN',
-                 scale_targets=False):
+                 scale_targets=False,
+                 backend = None):
 
-        self.model = Sequential()
+        # Keras with the requested backend (fixed for the whole Python process by the first instance)
+        self.keras = load_keras(backend)
+        self.backend = self.keras.backend.backend()
+        print(f'Keras backend: {self.backend}')
+
+        self.model = self.keras.Sequential()
         self.save_best_only = save_best_only
 
         self.data_storage_path = data_storage_path
@@ -501,7 +587,9 @@ class fastANN:
                                'training_history_file_name': training_history_file_name,
                                'X_data_df_file_name': X_data_df_file_name,
                                'Y_data_df_file_name': Y_data_df_file_name,
-                               'scale_targets': self.scale_targets
+                               'scale_targets': self.scale_targets,
+                               # informative: saved models can be reloaded with either backend
+                               'backend': self.backend
                               }
 
 
@@ -605,7 +693,7 @@ class fastANN:
         if(patience is not None):
             self.early_stop_patience = patience
 
-        self.early_stop = EarlyStopping(monitor = self.early_stop_monitor_metric,
+        self.early_stop = self.keras.callbacks.EarlyStopping(monitor = self.early_stop_monitor_metric,
                                         mode = self.early_stop_mode,
                                         verbose = 1,
                                         patience = self.early_stop_patience)
@@ -641,7 +729,7 @@ class fastANN:
 
         # the callback is stored in its own attribute: assigning it to self.checkpoint_callback
         # would shadow this method and make a second training fail
-        self.model_checkpoint = ModelCheckpoint(self.data_storage_path + model_file_name,
+        self.model_checkpoint = self.keras.callbacks.ModelCheckpoint(self.data_storage_path + model_file_name,
                                                 monitor = self.checkpoint_monitor_metric,
                                                 mode = self.checkpoint_mode,
                                                 verbose = 1,
@@ -687,11 +775,13 @@ class fastANN:
 
         n_features = self.X_train_s.shape[1]
 
+        keras = self.keras
+
         # reset
-        self.model = Sequential()
+        self.model = keras.Sequential()
 
         # input layer: one vector of n_features values per sample
-        self.model.add(Input(shape = (n_features,)))
+        self.model.add(keras.Input(shape = (n_features,)))
 
         # hidden layers
         for i in range(len(self.model_relative_width)):
@@ -700,24 +790,24 @@ class fastANN:
             model_dropout = self.model_dropout[i]
 
             if(self.activation != 'PReLU'):
-                self.model.add(Dense(int(n_features * model_relative_width), activation = self.activation))
+                self.model.add(keras.layers.Dense(int(n_features * model_relative_width), activation = self.activation))
             else:
                 # PReLU has trainable parameters, so it is a layer and not an activation name
-                self.model.add(Dense(int(n_features * model_relative_width)))
-                self.model.add(PReLU())
+                self.model.add(keras.layers.Dense(int(n_features * model_relative_width)))
+                self.model.add(keras.layers.PReLU())
 
-            self.model.add(Dropout(model_dropout))
+            self.model.add(keras.layers.Dropout(model_dropout))
 
         if self.autoencoder_mode:
             # last layer: ensure it matches input size in autoencoder mode
-            self.model.add(Dense(n_features, activation=self.last_layer_activation))
+            self.model.add(keras.layers.Dense(n_features, activation=self.last_layer_activation))
 
         else:
             # last layer: ensure it matches targets size in not autoencoder mode
-            self.model.add( Dense( int(self.Y_train.shape[1]), activation = self.last_layer_activation ) )
+            self.model.add(keras.layers.Dense(int(self.Y_train.shape[1]), activation = self.last_layer_activation))
 
         # compile
-        self.model.compile(optimizer = tensorflow.keras.optimizers.Adam(learning_rate=self.learning_rate),
+        self.model.compile(optimizer = keras.optimizers.Adam(learning_rate=self.learning_rate),
                          loss = self.loss,
                          metrics = self.metrics)
 
@@ -933,6 +1023,12 @@ class fastANN:
         """
         Load a saved Keras model into ``self.model``.
 
+        The model can have been trained with either backend. It is loaded
+        without its saved compile state and recompiled with the current
+        ``loss``, ``metrics`` and ``learning_rate`` (restored from the
+        hyperparameters by :meth:`load_all`), so a further training starts
+        with a fresh optimizer state.
+
         Parameters
         ----------
         model_file_name : str, optional
@@ -963,7 +1059,13 @@ class fastANN:
             print("Error: Model file does not exist.")
 
         print(f'\nTrying to load model {model_file_path}')
-        self.model = load_model(model_file_path)
+        # compile = False: the saved compile configuration can refer to backend-specific classes (e.g. the PyTorch
+        # Adam optimizer) that cannot be loaded with the other backend. Architecture and weights are portable, so the
+        # model is loaded without it and recompiled with the current loss, metrics and learning rate.
+        self.model = self.keras.models.load_model(model_file_path, compile = False)
+        self.model.compile(optimizer = self.keras.optimizers.Adam(learning_rate = self.learning_rate),
+                           loss = self.loss,
+                           metrics = self.metrics)
         print(f'Model loaded.')
 
         if self.model:
@@ -1374,27 +1476,42 @@ class fastANN:
         """
         Gradient of the mean squared error with respect to the network inputs.
 
+        Works with both backends (TensorFlow ``GradientTape`` or PyTorch
+        autograd).
+
         Parameters
         ----------
-        inputs : tensorflow.Tensor
+        inputs : numpy.ndarray
             Input samples, shape ``(n_samples, n_features)``.
-        targets : tensorflow.Tensor
+        targets : array-like
             Targets, shape ``(n_samples, n_outputs)``.
 
         Returns
         -------
-        tensorflow.Tensor
+        numpy.ndarray
             Gradients with the same shape as ``inputs``.
         """
+        keras = self.keras
+
+        # MSE is used for every network type: only the gradient magnitude matters here
+        mse = keras.losses.MeanSquaredError()
+        targets = keras.ops.convert_to_tensor(np.asarray(targets, dtype = np.float32))
+
+        if(self.backend == 'torch'):
+            # PyTorch autograd: the inputs become a leaf tensor that records its gradient
+            inputs = keras.ops.convert_to_tensor(np.asarray(inputs, dtype = np.float32))
+            inputs.requires_grad_(True)
+            loss = mse(targets, self.model(inputs))
+            loss.backward()
+            return inputs.grad.detach().cpu().numpy()
+
+        import tensorflow
+        inputs = tensorflow.convert_to_tensor(np.asarray(inputs, dtype = np.float32))
         with tensorflow.GradientTape() as tape:
             tape.watch(inputs)
-            predictions = self.model(inputs)
+            loss = mse(targets, self.model(inputs))
 
-            # MSE is used for every network type: only the gradient magnitude matters here
-            mse = tensorflow.keras.losses.MeanSquaredError()
-            loss = mse(targets, predictions)
-
-        return tape.gradient(loss, inputs)
+        return tape.gradient(loss, inputs).numpy()
 
 
     def gradient_feature_importance(self, feature_names = None):
@@ -1427,16 +1544,14 @@ class fastANN:
         if(feature_names is None):
             feature_names = self.X_data.columns.tolist() if self.X_data is not None else self.X_feature_names
 
-        X_tensor = tensorflow.convert_to_tensor(self.X_test_s, dtype=tensorflow.float32)
 
         # the targets the network was trained on: scaled features (autoencoder) or (possibly scaled) targets
         targets = self.X_test_s if self.autoencoder_mode else self.Y_test_s
-        Y_tensor = tensorflow.convert_to_tensor(np.asarray(targets, dtype=float), dtype=tensorflow.float32)
 
-        gradients = self.compute_gradients(X_tensor, Y_tensor)
+        gradients = self.compute_gradients(self.X_test_s, targets)
 
         # average over samples: one value per feature
-        feature_importance = np.mean(np.abs(gradients.numpy()), axis=0)
+        feature_importance = np.mean(np.abs(gradients), axis=0)
 
         feature_importance = feature_importance / np.sum(feature_importance)
 
