@@ -23,7 +23,7 @@ Typical uses: tabular classification (e.g. trade/no-trade signals), regression o
 
 ---
 
-**Current version: 2.0.1** (`fastANN.__version__`) — see the [CHANGELOG](CHANGELOG.md).
+**Current version: 2.1.0** (`fastANN.__version__`) — see the [CHANGELOG](CHANGELOG.md).
 
 ## Contents
 
@@ -171,6 +171,7 @@ print(model.backend)                                               # 'torch'
 | `X_train_s`, `X_test_s` | array | `None` | Already split **and scaled** features, used only without `X_data`/`Y_data`. |
 | `Y_train`, `Y_test` | `DataFrame` | `None` | Already split targets, used together with `X_train_s`/`X_test_s`. |
 | `split_type` | `'sequential'`, `'random'` | `'sequential'` | Train/test split method. |
+| `shuffle` | `bool` | `True` | Permute the training rows among the batches at every epoch (Keras `fit(shuffle=...)`). Changes only the presentation order, never the train/test split. Same name as in fastLSTM. |
 | `train_size_rate` | `float` 0–1 | `0.7` | Fraction of rows used for training. |
 | `scale_targets` | `bool` | `False` | Scale the targets too; predictions are descaled by `model_predict`. |
 | `save_X_Y_data` | `bool` | `True` | Save `X_data`/`Y_data` as CSV at training time, so `load_all()` can rebuild the same split. |
@@ -306,7 +307,7 @@ models/
 └── ...
 ```
 
-What the JSON records: architecture (`model_relative_width`, `model_dropout`, `activation`, `autoencoder_mode`, …), training settings (`loss`, `metrics`, `learning_rate`, `batch_size`, early stopping and checkpoint settings), data settings (`split_type`, `train_size_rate`, `scale_targets`, feature and target column names) and the file names of the run.
+What the JSON records: architecture (`model_relative_width`, `model_dropout`, `activation`, `autoencoder_mode`, …), training settings (`loss`, `metrics`, `learning_rate`, `batch_size`, early stopping and checkpoint settings), data settings (`split_type`, `shuffle`, `train_size_rate`, `scale_targets`, feature and target column names) and the file names of the run.
 
 ### Recommended practices
 

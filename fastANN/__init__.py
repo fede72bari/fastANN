@@ -22,7 +22,7 @@ Typical workflow
 >>> ann.network_predictions_evaluation(min_probability = 0.5)
 """
 
-__version__ = '2.0.1'
+__version__ = '2.1.0'
 
 # ---------------------------------------------------------------------------
 #                              Libraries Import
@@ -330,6 +330,12 @@ class fastANN:
         (``'tensorflow'`` when it is not set). The backend is fixed for the
         whole process by the first instance: to change it restart the kernel.
         Saved models can be reloaded with either backend.
+    shuffle : bool, default True
+        Permute the training rows among the batches at every epoch (Keras
+        ``fit(shuffle = ...)``). It changes only the order in which the rows
+        are presented to the network, never the train/test split (see
+        ``split_type``). ``True`` is the Keras default and the behaviour of
+        the previous versions; same parameter name as in ``fastLSTM``.
 
     Attributes
     ----------
@@ -414,6 +420,7 @@ class fastANN:
                  data_storage_path="\\cyPredict\\",
                  model_name = 'ANN',
                  scale_targets=False,
+                 shuffle = True,
                  backend = None):
 
         # Keras with the requested backend (fixed for the whole Python process by the first instance)
@@ -492,6 +499,7 @@ class fastANN:
         self.Y_test_s = self.Y_test
 
         self.split_type = split_type
+        self.shuffle = shuffle
 
         self.scaler = StandardScaler()
 
@@ -582,6 +590,7 @@ class fastANN:
                                'Y_feature_names': Y_feature_names,
                                'scaler_type': 'StandardScaler',
                                'split_type': self.split_type,
+                               'shuffle': self.shuffle,
                                'data_storage_path': self.data_storage_path,
                                'model_file_name': model_file_name,
                                'scaler_file_name': scaler_file_name,
@@ -654,6 +663,8 @@ class fastANN:
 
         self.scaler_type = self.hyperparameters['scaler_type']
         self.split_type = self.hyperparameters['split_type']
+        # files of versions < 2.1 do not store shuffle: Keras shuffled by default
+        self.shuffle = self.hyperparameters.get('shuffle', True)
         # data_storage_path is deliberately not restored (see docstring): the saved one may not exist any more
         self.model_file_name = self.hyperparameters['model_file_name']
         self.scaler_file_name = self.hyperparameters['scaler_file_name']
@@ -986,6 +997,7 @@ class fastANN:
             validation_data=(X_val, Y_val),
             epochs=epochs,
             batch_size=batch_size,
+            shuffle=self.shuffle,
             callbacks=[self.early_stop, self.model_checkpoint]
         )
 
