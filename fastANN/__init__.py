@@ -22,7 +22,7 @@ Typical workflow
 >>> ann.network_predictions_evaluation(min_probability = 0.5)
 """
 
-__version__ = '2.1.0'
+__version__ = '2.2.0'
 
 # ---------------------------------------------------------------------------
 #                              Libraries Import
@@ -863,7 +863,7 @@ class fastANN:
         print(self.model_summary)
 
 
-    def network_training(self, epochs, batch_size):
+    def network_training(self, epochs, batch_size, callbacks = None):
         """
         Train the network and save every artefact of the run.
 
@@ -897,6 +897,10 @@ class fastANN:
             before).
         batch_size : int
             Number of samples per gradient update.
+        callbacks : list of keras.callbacks.Callback, optional
+            Extra callbacks run together with the early stopping and the
+            best-epoch checkpoint (e.g. a time limit or a learning-rate
+            schedule).
 
         Returns
         -------
@@ -998,7 +1002,7 @@ class fastANN:
             epochs=epochs,
             batch_size=batch_size,
             shuffle=self.shuffle,
-            callbacks=[self.early_stop, self.model_checkpoint]
+            callbacks=[self.early_stop, self.model_checkpoint] + list(callbacks or [])
         )
 
         # save history

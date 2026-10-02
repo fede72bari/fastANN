@@ -23,7 +23,7 @@ Typical uses: tabular classification (e.g. trade/no-trade signals), regression o
 
 ---
 
-**Current version: 2.1.0** (`fastANN.__version__`) — see the [CHANGELOG](CHANGELOG.md).
+**Current version: 2.2.0** (`fastANN.__version__`) — see the [CHANGELOG](CHANGELOG.md).
 
 ## Contents
 
@@ -227,7 +227,7 @@ Every method has a complete docstring: `help(fastANN.network_training)`.
 | Method | Description |
 |---|---|
 | `network_structure_set_compile()` | Builds the network (see [architecture](#network-architecture)) and compiles it with Adam, `loss` and `metrics`. The text summary is kept in `model_summary`. |
-| `network_training(epochs, batch_size)` | Trains with early stopping and checkpointing, saves every artefact (see [Saved files](#saved-files)), reloads the best epoch into `model` and plots the history. |
+| `network_training(epochs, batch_size, callbacks=None)` | Trains with early stopping and checkpointing, saves every artefact (see [Saved files](#saved-files)), reloads the best epoch into `model` and plots the history. (extra Keras `callbacks` optional) |
 | `split_and_scale(scaler_fit=False)` | Splits `X_data`/`Y_data` (by `split_type`) and scales them. `scaler_fit=True` fits the scalers (new data), `False` only applies them. Called by the constructor with `True`. |
 | `early_stop_patience_set(patience=None)` | Rebuilds the early stopping callback, optionally with a new patience. |
 | `checkpoint_callback(save_best_only=None)` | Creates the `ModelCheckpoint` callback (`model_checkpoint`). Called by `network_training`. |
