@@ -22,7 +22,7 @@ Typical workflow
 >>> ann.network_predictions_evaluation(min_probability = 0.5)
 """
 
-__version__ = '2.0.0'
+__version__ = '2.0.1'
 
 # ---------------------------------------------------------------------------
 #                              Libraries Import
@@ -671,6 +671,37 @@ class fastANN:
         self.early_stop_patience_set(self.early_stop_patience)
 
 
+    def compile_metrics(self):
+        """
+        Metrics passed to ``model.compile``, with ``'accuracy'`` made explicit.
+
+        With more than one output Keras 3 turns the string ``'accuracy'``
+        into categorical accuracy (argmax across the outputs), which is wrong
+        for independent sigmoid outputs: on multi-step or multi-target binary
+        targets a constant model can score above 90%. ``'accuracy'`` (or
+        ``'acc'``) is therefore replaced by ``BinaryAccuracy`` when the output
+        activation is sigmoid and by ``CategoricalAccuracy`` when it is
+        softmax; the metric keeps the name ``'accuracy'``, so the history
+        columns (``accuracy``, ``val_accuracy``) do not change.
+
+        Returns
+        -------
+        list
+            Metrics for ``model.compile``.
+        """
+        resolved = []
+
+        for metric in self.metrics:
+            if((metric in ('accuracy', 'acc')) and (self.last_layer_activation == 'sigmoid')):
+                resolved.append(self.keras.metrics.BinaryAccuracy(name = 'accuracy'))
+            elif((metric in ('accuracy', 'acc')) and (self.last_layer_activation == 'softmax')):
+                resolved.append(self.keras.metrics.CategoricalAccuracy(name = 'accuracy'))
+            else:
+                resolved.append(metric)
+
+        return resolved
+
+
     def early_stop_patience_set(self, patience = None):
         """
         Create the early stopping callback (``self.early_stop``).
@@ -811,7 +842,7 @@ class fastANN:
         # compile
         self.model.compile(optimizer = keras.optimizers.Adam(learning_rate=self.learning_rate),
                          loss = self.loss,
-                         metrics = self.metrics)
+                         metrics = self.compile_metrics())
 
         # report: model.summary() only prints, so its lines are collected to keep a copy in model_summary
         summary_lines = []
@@ -1067,7 +1098,7 @@ class fastANN:
         self.model = self.keras.models.load_model(model_file_path, compile = False)
         self.model.compile(optimizer = self.keras.optimizers.Adam(learning_rate = self.learning_rate),
                            loss = self.loss,
-                           metrics = self.metrics)
+                           metrics = self.compile_metrics())
         print(f'Model loaded.')
 
         if self.model:

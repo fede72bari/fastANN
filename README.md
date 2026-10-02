@@ -23,7 +23,7 @@ Typical uses: tabular classification (e.g. trade/no-trade signals), regression o
 
 ---
 
-**Current version: 2.0.0** (`fastANN.__version__`) — see the [CHANGELOG](CHANGELOG.md).
+**Current version: 2.0.1** (`fastANN.__version__`) — see the [CHANGELOG](CHANGELOG.md).
 
 ## Contents
 
