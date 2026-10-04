@@ -4,6 +4,23 @@ All notable changes to `fastANN` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] - 2026-10-04
+
+### Added
+- `sample_weight`: one weight per row of `X_data` (or of `X_train_s` with pre-split inputs), passed to `fit` for the
+  training rows.
+- `monitor_auc` and `monitor_auc_rows`: ROC AUC of the test-set predictions computed at the end of every epoch,
+  optionally on a subset of rows, logged as `val_monitored_auc` and usable to choose the epoch with early stopping
+  and checkpoint (mode `'max'`). Module function `make_auc_callback()` and method `auc_callbacks()`.
+- `hidden_layer_type = 'gated_fan'` (with `periodic_share`, `gated`, `frequency_init_std`): gated Fourier Analysis
+  Network hidden layers instead of `Dense`. Module function `fan_layers()`; the layer is the one of
+  `fastGatedFourierAnalysisNetwork` and saved models load in both packages.
+- The new settings are saved in the hyperparameters JSON (the weight and row arrays only as flags).
+
+### Changed
+- The random split now splits row positions with the same seed (identical rows to the previous versions), so that
+  weights and row masks follow the rows.
+
 ## [2.2.0] - 2026-10-02
 
 ### Added

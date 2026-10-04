@@ -23,7 +23,7 @@ Typical uses: tabular classification (e.g. trade/no-trade signals), regression o
 
 ---
 
-**Current version: 2.2.0** (`fastANN.__version__`) — see the [CHANGELOG](CHANGELOG.md).
+**Current version: 2.3.0** (`fastANN.__version__`) — see the [CHANGELOG](CHANGELOG.md).
 
 ## Contents
 
@@ -182,7 +182,9 @@ print(model.backend)                                               # 'torch'
 |---|---|---|---|
 | `model_relative_width` | `list` of `float` | `[1]` | Width of each hidden layer relative to the number of features. Its length = number of hidden layers. |
 | `model_dropout` | `list` of `float` 0–1 | `[0]` | Dropout after each hidden layer (same length as `model_relative_width`). |
-| `activation` | Keras activation name or `'PReLU'` | `'relu'` | Activation of the hidden layers. |
+| `activation` | Keras activation name or `'PReLU'` | `'relu'` | Activation of the hidden layers (of their non-periodic part with `'gated_fan'`). |
+| `hidden_layer_type` | `'dense'`, `'gated_fan'` | `'dense'` | `'gated_fan'` replaces every hidden `Dense` layer with a gated Fourier Analysis Network layer of the same width: learned periodic components (cosines and sines of learned frequencies, scaled by trainable gates) next to a normal dense part. Same layer as [fastGatedFourierAnalysisNetwork](https://github.com/fede72bari/fastGatedFourierAnalysisNetwork), which adds frequency bounds/initialisations and the periodic-components report. |
+| `periodic_share`, `gated`, `frequency_init_std` | `float`, `bool`, `float` | `1/3`, `True`, `1.0` | (`'gated_fan'` only) share of each layer given to the periodic part, trainable gates on/off, scale of the initial frequencies. |
 | `last_layer_activation` | `'sigmoid'`, `'softmax'`, `'linear'`, … | `'sigmoid'` | Activation of the output layer. |
 | `autoencoder_mode` | `bool` | `False` | Train the network to reproduce its scaled input. |
 
@@ -193,6 +195,9 @@ print(model.backend)                                               # 'torch'
 | `learning_rate` | `float` | `0.0003` | Adam learning rate. |
 | `loss` | Keras loss name or object | `'binary_crossentropy'` | e.g. `'mse'`, `'mae'`, `'categorical_crossentropy'`. |
 | `metrics` | `list` of `str` | `['accuracy']` | Metrics logged by Keras (validation ones get the `val_` prefix). |
+| `sample_weight` | array-like | `None` | One weight per row of `X_data`: the training rows weight the loss (e.g. larger weights for the hard cases, such as options with the strike close to the underlying). Validation is not weighted. Not saved in the files (only whether it was used). |
+| `monitor_auc` | `bool` | `False` | Compute the ROC AUC of the test-set predictions at the end of every epoch and log it as `val_monitored_auc` (binary targets). Use it as `early_stop_monitor_metric` / `checkpoint_monitor_metric` with mode `'max'` to choose the epoch on the AUC. One extra prediction pass on the test set per epoch. |
+| `monitor_auc_rows` | array-like of `bool` | `None` | One value per row of `X_data`: the monitored AUC uses only the selected test rows (e.g. strike within 2% of the underlying). Implies `monitor_auc = True`. Not saved in the files. |
 | `history_metrics` | `list` of `str` | `['accuracy', 'val_accuracy']` | Columns plotted by `plot_training_history()` (use `['loss', 'val_loss']` for regressors/autoencoders). |
 
 The batch size is given to `network_training(epochs, batch_size)`.
@@ -419,6 +424,34 @@ ann.network_predictions_evaluation(0.5)
 ```python
 importances, names = ann.gradient_feature_importance()
 print(names[-5:])   # five most important features
+```
+
+---
+
+
+### 7. Choose the epoch on the AUC of the hard cases, and weight them more
+
+The loss and the accuracy are dominated by the easy rows; when what matters is how well the model ranks the hard cases, monitor the AUC on those rows and give them more weight:
+
+```python
+near = (df['STRIKE_DISTANCE_PCT'].abs() <= 0.02).values           # hard cases, one flag per row of X_df
+weights = np.where(near, 3.0, 1.0)                                  # 3x weight in the training loss
+
+model = fastANN(X_data = X_df, Y_data = Y_df[['itm']],
+            sample_weight = weights,
+            monitor_auc_rows = near,                                # logs val_monitored_auc on these rows
+            early_stop_monitor_metric = 'val_monitored_auc', early_stop_mode = 'max',
+            checkpoint_monitor_metric = 'val_monitored_auc', checkpoint_mode = 'max',
+            early_stop_patience = 10, data_storage_path = './models/')
+```
+
+AUC is a ranking measure and is not differentiable, so it is not used as the loss: the network is still trained with its loss (weighted), and the AUC chooses the epoch to keep.
+
+### 8. Gated FAN hidden layers
+
+```python
+fan = fastANN(X_data = X_df, Y_data = Y_df[['signal']], hidden_layer_type = 'gated_fan', activation = 'gelu',
+              model_relative_width = [16, 4], model_dropout = [0.5, 0.3], data_storage_path = './models/')
 ```
 
 ---

@@ -22,7 +22,7 @@ Typical workflow
 >>> ann.network_predictions_evaluation(min_probability = 0.5)
 """
 
-__version__ = '2.2.0'
+__version__ = '2.3.0'
 
 # ---------------------------------------------------------------------------
 #                              Libraries Import
@@ -210,6 +210,313 @@ def load_keras(backend = None):
     return keras
 
 
+# custom layers are registered under the name of the sister package that defines them, so .keras files are
+# interchangeable between fastANN and fastGatedFourierAnalysisNetwork
+KERAS_PACKAGE = 'fastGatedFourierAnalysisNetwork'
+
+
+# ---------------------------------------------------------------------------
+#                       Gated FAN layer (Keras 3, any backend)
+# ---------------------------------------------------------------------------
+
+# The layer classes need the keras module, which is imported only when the first instance is created (the backend
+# must be chosen first). fan_layers() defines and registers them once and caches them here.
+_FAN_OBJECTS = {}
+
+
+def periodic_split(units, periodic_share):
+    """
+    Number of frequencies and of non-periodic units of a gated FAN layer.
+
+    The layer output has ``units`` values: ``2 * d_p`` periodic ones (a cosine
+    and a sine for each of the ``d_p`` frequencies) and ``d_p_bar``
+    non-periodic ones, with ``2 * d_p`` as close as possible to
+    ``units * periodic_share``.
+
+    Parameters
+    ----------
+    units : int
+        Output width of the layer.
+    periodic_share : float
+        Share (0 - 1) of the output given to the periodic part. 0 gives a
+        plain dense layer (no frequencies, no gate).
+
+    Returns
+    -------
+    d_p : int
+        Number of learned frequencies (cosine + sine pairs).
+    d_p_bar : int
+        Number of non-periodic units.
+
+    Raises
+    ------
+    ValueError
+        If ``periodic_share`` is outside [0, 1) or ``units`` is too small to
+        hold both parts.
+
+    Examples
+    --------
+    >>> periodic_split(368, 1 / 3)
+    (61, 246)
+    """
+    if(not (0 <= periodic_share < 1)):
+        raise ValueError(f'periodic_share must be in [0, 1), not {periodic_share}.')
+
+    units = int(units)
+    d_p = int(round(units * periodic_share / 2))
+
+    if((periodic_share > 0) and (d_p == 0)):
+        d_p = 1
+
+    d_p_bar = units - 2 * d_p
+
+    if(d_p_bar < 1):
+        raise ValueError(f'A layer of {units} units cannot hold {2 * d_p} periodic units and at least one '
+                         f'non-periodic unit: increase model_relative_width or reduce periodic_share.')
+
+    return d_p, d_p_bar
+
+
+def fan_layers(keras = None):
+    """
+    Define (once) and return the custom Keras objects of the package.
+
+    Returns the dictionary ``{'GatedFAN': <layer class>, 'FrequencyClip':
+    <constraint class>}``. The classes are registered in the Keras
+    serialization registry (package ``'fastGatedFourierAnalysisNetwork'``), so
+    saved ``.keras`` files reload with ``keras.models.load_model`` once this
+    function has been called; :meth:`fastGatedFourierAnalysisNetwork.load_model`
+    does it automatically. The dictionary can also be passed as
+    ``custom_objects``.
+
+    Parameters
+    ----------
+    keras : module, optional
+        The ``keras`` module; defaults to :func:`load_keras` ``()``.
+
+    Returns
+    -------
+    dict
+        Custom objects by name.
+
+    Examples
+    --------
+    >>> objects = fan_layers()
+    >>> layer = objects['GatedFAN'](units = 96)
+    """
+    if(_FAN_OBJECTS):
+        return _FAN_OBJECTS
+
+    if(keras is None):
+        keras = load_keras()
+
+    ops = keras.ops
+
+
+    @keras.saving.register_keras_serializable(package = KERAS_PACKAGE)
+    class FrequencyClip(keras.constraints.Constraint):
+        """
+        Keep the absolute value of every frequency inside ``[min_frequency, max_frequency]``.
+
+        Applied by the optimizer after each update; the sign of each weight is
+        kept. ``None`` leaves that side unbounded.
+        """
+
+        def __init__(self, min_frequency = None, max_frequency = None):
+            self.min_frequency = None if min_frequency is None else float(min_frequency)
+            self.max_frequency = None if max_frequency is None else float(max_frequency)
+
+        def __call__(self, w):
+            magnitude = ops.abs(w)
+
+            if(self.min_frequency is not None):
+                magnitude = ops.maximum(magnitude, self.min_frequency)
+
+            if(self.max_frequency is not None):
+                magnitude = ops.minimum(magnitude, self.max_frequency)
+
+            # a weight exactly 0 has sign 0: it is sent to +min_frequency
+            sign = ops.where(w >= 0, 1.0, -1.0)
+            return sign * magnitude
+
+        def get_config(self):
+            return {'min_frequency': self.min_frequency, 'max_frequency': self.max_frequency}
+
+
+    @keras.saving.register_keras_serializable(package = KERAS_PACKAGE)
+    class GatedFAN(keras.layers.Layer):
+        """
+        Gated Fourier Analysis Network layer.
+
+        Output (``units`` values)::
+
+            [ g * cos(x Wp) , g * sin(x Wp) , (1 - mean(g)) * act(x Wp_bar + b) ]
+
+        * ``Wp`` (``n_inputs x d_p``): learned frequencies. Each periodic unit
+          is a sinusoid along a learned direction of the input, with period
+          ``2 * pi / |Wp[:, j]|`` in input units.
+        * ``g = sigmoid(gate)``: one trainable gate per frequency (starts at
+          0.5). It scales the cosine and sine of that frequency; the
+          non-periodic part is scaled by ``1 - mean(g)``, so the layer can
+          move its capacity between periodic and non-periodic modelling.
+        * ``Wp_bar``, ``b``: an ordinary dense layer with activation ``act``.
+
+        With ``gated = False`` the gate is not created and ``g = 1``, ``1 -
+        mean(g)`` is replaced by 1 (plain FAN layer). With ``periodic_share =
+        0`` the layer is a plain dense layer.
+
+        Parameters
+        ----------
+        units : int
+            Output width.
+        periodic_share : float, default 1/3
+            Share of the output given to the cosine + sine pairs (see
+            :func:`periodic_split`).
+        activation : str, default 'gelu'
+            Keras activation of the non-periodic part.
+        gated : bool, default True
+            Create the trainable gates.
+        frequency_init_std : float, default 1.0
+            Standard deviation of the normal initialisation of ``Wp``. With
+            standardized inputs, 1 gives periods of a few standard deviations
+            (random Fourier features); use larger values for faster cycles.
+        min_frequency, max_frequency : float, optional
+            Bounds of ``|Wp|`` (enforced with :class:`FrequencyClip`), e.g.
+            to forbid periods longer than the training window.
+        """
+
+        def __init__(self, units, periodic_share = 1 / 3, activation = 'gelu', gated = True,
+                     frequency_init_std = 1.0, min_frequency = None, max_frequency = None, **kwargs):
+            super().__init__(**kwargs)
+            self.units = int(units)
+            self.periodic_share = float(periodic_share)
+            self.activation_name = activation
+            self.activation = keras.activations.get(activation)
+            self.gated = bool(gated)
+            self.frequency_init_std = float(frequency_init_std)
+            self.min_frequency = min_frequency
+            self.max_frequency = max_frequency
+            self.d_p, self.d_p_bar = periodic_split(self.units, self.periodic_share)
+
+        def build(self, input_shape):
+            n_inputs = int(input_shape[-1])
+
+            if(self.d_p > 0):
+                constraint = None
+                if((self.min_frequency is not None) or (self.max_frequency is not None)):
+                    constraint = FrequencyClip(self.min_frequency, self.max_frequency)
+
+                self.Wp = self.add_weight(name = 'Wp', shape = (n_inputs, self.d_p),
+                                          initializer = keras.initializers.RandomNormal(0.0, self.frequency_init_std),
+                                          constraint = constraint, trainable = True)
+
+                if(self.gated):
+                    # sigmoid(0) = 0.5: periodic and non-periodic parts start with the same weight
+                    self.gate = self.add_weight(name = 'gate', shape = (self.d_p,), initializer = 'zeros', trainable = True)
+
+            self.Wp_bar = self.add_weight(name = 'Wp_bar', shape = (n_inputs, self.d_p_bar), initializer = 'glorot_uniform', trainable = True)
+            self.b = self.add_weight(name = 'b', shape = (self.d_p_bar,), initializer = 'zeros', trainable = True)
+
+        def call(self, x):
+            non_periodic = self.activation(ops.matmul(x, self.Wp_bar) + self.b)
+
+            if(self.d_p == 0):
+                return non_periodic
+
+            wx = ops.matmul(x, self.Wp)
+
+            if(self.gated):
+                g = ops.sigmoid(self.gate)
+                periodic = ops.concatenate([g * ops.cos(wx), g * ops.sin(wx)], axis = -1)
+                non_periodic = (1.0 - ops.mean(g)) * non_periodic
+            else:
+                periodic = ops.concatenate([ops.cos(wx), ops.sin(wx)], axis = -1)
+
+            return ops.concatenate([periodic, non_periodic], axis = -1)
+
+        def compute_output_shape(self, input_shape):
+            return tuple(input_shape[:-1]) + (self.units,)
+
+        def gate_values(self):
+            """Gates ``g`` (numpy array of ``d_p`` values; ones when the layer is not gated, empty without periodic part)."""
+            if(self.d_p == 0):
+                return np.array([])
+            if(not self.gated):
+                return np.ones(self.d_p)
+            return keras.ops.convert_to_numpy(ops.sigmoid(self.gate))
+
+        def periods(self):
+            """Period of each sinusoid along its own direction, ``2 * pi / |Wp[:, j]|``, in units of the (scaled) input."""
+            if(self.d_p == 0):
+                return np.array([])
+            w = keras.ops.convert_to_numpy(self.Wp)
+            return 2 * np.pi / np.maximum(np.linalg.norm(w, axis = 0), 1e-12)
+
+        def get_config(self):
+            config = super().get_config()
+            config.update({'units': self.units, 'periodic_share': self.periodic_share, 'activation': self.activation_name,
+                           'gated': self.gated, 'frequency_init_std': self.frequency_init_std,
+                           'min_frequency': self.min_frequency, 'max_frequency': self.max_frequency})
+            return config
+
+
+    _FAN_OBJECTS.update({'GatedFAN': GatedFAN, 'FrequencyClip': FrequencyClip})
+    return _FAN_OBJECTS
+
+
+def make_auc_callback(keras, predict, y_true, rows_mask = None, name = 'val_monitored_auc'):
+    """
+    Keras callback that adds the ROC AUC of the validation predictions to the logs of every epoch.
+
+    The value is written into the epoch logs under ``name`` BEFORE early
+    stopping and checkpoint read them (the callback must come first in the
+    callbacks list), so it can be used as ``early_stop_monitor_metric`` /
+    ``checkpoint_monitor_metric`` (mode ``'max'``) and appears in the
+    training history. With several outputs the AUC is computed on all the
+    outputs pooled together. Same function as in fastLSTM.
+
+    Parameters
+    ----------
+    keras : module
+        The Keras module (see :func:`load_keras`).
+    predict : callable
+        Function without arguments returning the validation predictions,
+        shape ``(n_samples, n_outputs)``.
+    y_true : array-like
+        Actual 0/1 targets aligned with the predictions.
+    rows_mask : array-like of bool, optional
+        Samples on which the AUC is computed (e.g. the hard cases); all
+        samples when ``None``.
+    name : str, default 'val_monitored_auc'
+        Key of the value in the logs and in the training history.
+
+    Returns
+    -------
+    keras.callbacks.Callback
+        The callback; NaN is logged when the selected samples contain one
+        class only.
+    """
+    from sklearn.metrics import roc_auc_score
+
+    y_true = np.asarray(y_true, dtype = float)
+    y_true = y_true.reshape(len(y_true), -1)
+    mask = np.ones(len(y_true), dtype = bool) if rows_mask is None else np.asarray(rows_mask, dtype = bool)
+    if(len(mask) != len(y_true)):
+        raise ValueError(f'rows_mask has {len(mask)} values but there are {len(y_true)} validation samples.')
+
+    class MonitoredAUC(keras.callbacks.Callback):
+
+        def on_epoch_end(self, epoch, logs = None):
+            predictions = np.asarray(predict(), dtype = float).reshape(len(y_true), -1)
+            selected_true, selected_pred = y_true[mask].ravel(), predictions[mask].ravel()
+            auc = roc_auc_score(selected_true, selected_pred) if len(np.unique(selected_true)) == 2 else float('nan')
+            if(logs is not None):
+                logs[name] = auc
+            print(f' - {name}: {auc:.4f} ({int(mask.sum())} samples)')
+
+    return MonitoredAUC()
+
+
 class fastANN:
     """
     Feed-forward (dense) neural network for tabular classification, regression
@@ -274,7 +581,27 @@ class fastANN:
     activation : str, default 'relu'
         Activation of the hidden layers: any Keras activation name
         (``'relu'``, ``'tanh'``, ...) or ``'PReLU'`` (a trainable PReLU layer
-        is added after each linear Dense layer).
+        is added after each linear Dense layer). With ``hidden_layer_type =
+        'gated_fan'`` it is the activation of the non-periodic part (use
+        e.g. ``'gelu'``; ``'PReLU'`` is not available there).
+    hidden_layer_type : {'dense', 'gated_fan'}, default 'dense'
+        ``'gated_fan'`` replaces every hidden ``Dense`` layer with a gated
+        Fourier Analysis Network layer of the same width: ``periodic_share``
+        of its outputs are cosines and sines of learned frequencies, scaled
+        by trainable gates, the rest is a normal dense part
+        (``[g cos(xWp), g sin(xWp), (1 - mean(g)) act(xWp_bar + b)]``). Same
+        layer as the sister package ``fastGatedFourierAnalysisNetwork``
+        (which adds frequency bounds and initialisations, and the periodic
+        components report).
+    periodic_share : float, default 1/3
+        Share of each gated FAN layer output given to the cosine + sine
+        pairs (``hidden_layer_type = 'gated_fan'`` only).
+    gated : bool, default True
+        Trainable gate per frequency (``'gated_fan'`` only); ``False`` gives
+        the ungated FAN layer.
+    frequency_init_std : float, default 1.0
+        Standard deviation of the normal initialisation of the frequencies
+        (``'gated_fan'`` only; inputs are standardized).
     last_layer_activation : str, default 'sigmoid'
         Activation of the output layer: ``'sigmoid'`` for independent binary
         targets, ``'softmax'`` for one-hot multi-class targets, ``'linear'``
@@ -330,6 +657,24 @@ class fastANN:
         (``'tensorflow'`` when it is not set). The backend is fixed for the
         whole process by the first instance: to change it restart the kernel.
         Saved models can be reloaded with either backend.
+    sample_weight : array-like, optional
+        One weight per row of ``X_data`` (with pre-split inputs: per row of
+        ``X_train_s``); the training rows weight the loss, e.g. larger weights
+        for the hard cases (options with the strike close to the
+        underlying). Validation is not weighted. Not stored in the saved
+        files (only whether it was used).
+    monitor_auc : bool, default False
+        Compute the ROC AUC of the test-set predictions at the end of every
+        epoch (binary targets) and log it as ``'val_monitored_auc'``: use it
+        as ``early_stop_monitor_metric`` / ``checkpoint_monitor_metric`` with
+        mode ``'max'`` to choose the epoch on the AUC instead of the loss or
+        the accuracy. Costs one extra prediction pass on the test set per
+        epoch.
+    monitor_auc_rows : array-like of bool, optional
+        One value per row of ``X_data`` (with pre-split inputs: per row of
+        ``X_test_s``): the AUC is computed only on the selected test rows
+        (e.g. strike within 2% of the underlying). Implies ``monitor_auc =
+        True``. Not stored in the saved files (only whether it was used).
     shuffle : bool, default True
         Permute the training rows among the batches at every epoch (Keras
         ``fit(shuffle = ...)``). It changes only the order in which the rows
@@ -404,6 +749,10 @@ class fastANN:
                  model_dropout = [0],
                  learning_rate = 0.0003,
                  activation = 'relu',
+                 hidden_layer_type = 'dense',
+                 periodic_share = 1 / 3,
+                 gated = True,
+                 frequency_init_std = 1.0,
                  last_layer_activation = 'sigmoid',
                  loss = 'binary_crossentropy',
                  metrics = ['accuracy'],
@@ -421,6 +770,9 @@ class fastANN:
                  model_name = 'ANN',
                  scale_targets=False,
                  shuffle = True,
+                 sample_weight = None,
+                 monitor_auc = False,
+                 monitor_auc_rows = None,
                  backend = None):
 
         # Keras with the requested backend (fixed for the whole Python process by the first instance)
@@ -438,6 +790,12 @@ class fastANN:
         self.model_dropout = model_dropout
         self.learning_rate = learning_rate
         self.activation = activation
+        if(hidden_layer_type not in ('dense', 'gated_fan')):
+            raise ValueError(f"hidden_layer_type must be 'dense' or 'gated_fan', not '{hidden_layer_type}'.")
+        self.hidden_layer_type = hidden_layer_type
+        self.periodic_share = periodic_share
+        self.gated = gated
+        self.frequency_init_std = frequency_init_std
         self.last_layer_activation = last_layer_activation
         self.loss = loss
         self.metrics = metrics
@@ -500,6 +858,14 @@ class fastANN:
 
         self.split_type = split_type
         self.shuffle = shuffle
+
+        self.sample_weight = None if sample_weight is None else np.asarray(sample_weight, dtype = float)
+        self.monitor_auc_rows = None if monitor_auc_rows is None else np.asarray(monitor_auc_rows, dtype = bool)
+        # a rows mask implies the AUC monitor
+        self.monitor_auc = bool(monitor_auc) or (self.monitor_auc_rows is not None)
+        # with pre-split inputs the arrays already refer to the training / test rows
+        self.sample_weight_train = self.sample_weight
+        self.monitor_auc_rows_test = self.monitor_auc_rows
 
         self.scaler = StandardScaler()
 
@@ -574,6 +940,10 @@ class fastANN:
                                'model_dropout': self.model_dropout,
                                'learning_rate': self.learning_rate,
                                'activation': self.activation,
+                               'hidden_layer_type': getattr(self, 'hidden_layer_type', 'dense'),
+                               'periodic_share': getattr(self, 'periodic_share', 1 / 3),
+                               'gated': getattr(self, 'gated', True),
+                               'frequency_init_std': getattr(self, 'frequency_init_std', 1.0),
                                'last_layer_activation': self.last_layer_activation,
                                'loss': self.loss if isinstance(self.loss, str) else getattr(self.loss, 'name', str(self.loss)),
                                'metrics': self.metrics,
@@ -591,6 +961,10 @@ class fastANN:
                                'scaler_type': 'StandardScaler',
                                'split_type': self.split_type,
                                'shuffle': self.shuffle,
+                               # arrays not saved: only whether they were used
+                               'sample_weight': getattr(self, 'sample_weight', None) is not None,
+                               'monitor_auc': getattr(self, 'monitor_auc', False),
+                               'monitor_auc_rows': getattr(self, 'monitor_auc_rows', None) is not None,
                                'data_storage_path': self.data_storage_path,
                                'model_file_name': model_file_name,
                                'scaler_file_name': scaler_file_name,
@@ -630,6 +1004,11 @@ class fastANN:
 
         self.learning_rate = self.hyperparameters['learning_rate']
         self.activation = self.hyperparameters['activation']
+        # files of versions < 2.3 have dense hidden layers
+        self.hidden_layer_type = self.hyperparameters.get('hidden_layer_type', 'dense')
+        self.periodic_share = self.hyperparameters.get('periodic_share', 1 / 3)
+        self.gated = self.hyperparameters.get('gated', True)
+        self.frequency_init_std = self.hyperparameters.get('frequency_init_std', 1.0)
         self.last_layer_activation = self.hyperparameters['last_layer_activation']
         self.loss = self.hyperparameters['loss']
 
@@ -833,7 +1212,13 @@ class fastANN:
             model_relative_width = self.model_relative_width[i]
             model_dropout = self.model_dropout[i]
 
-            if(self.activation != 'PReLU'):
+            if(getattr(self, 'hidden_layer_type', 'dense') == 'gated_fan'):
+                # periodic (cos, sin) and non-periodic units side by side, see fan_layers
+                self.model.add(fan_layers(keras)['GatedFAN'](units = int(n_features * model_relative_width),
+                                                             periodic_share = self.periodic_share, activation = self.activation,
+                                                             gated = self.gated, frequency_init_std = self.frequency_init_std,
+                                                             name = f'gated_fan_{i}'))
+            elif(self.activation != 'PReLU'):
                 self.model.add(keras.layers.Dense(int(n_features * model_relative_width), activation = self.activation))
             else:
                 # PReLU has trainable parameters, so it is a layer and not an activation name
@@ -861,6 +1246,28 @@ class fastANN:
         self.model_summary = '\n'.join(summary_lines)
 
         print(self.model_summary)
+
+
+    def auc_callbacks(self, X_val, Y_val):
+        """
+        The test-set AUC monitor (see ``monitor_auc``), as a list ready for ``fit``.
+
+        Parameters
+        ----------
+        X_val, Y_val : array-like
+            Validation inputs and the targets the network is trained on.
+
+        Returns
+        -------
+        list of keras.callbacks.Callback
+            Empty when ``monitor_auc`` is off; otherwise the callback built by
+            :func:`make_auc_callback`, restricted to ``monitor_auc_rows``.
+        """
+        if(not getattr(self, 'monitor_auc', False)):
+            return []
+
+        return [make_auc_callback(self.keras, lambda: self.model.predict(X_val, verbose = 0), np.asarray(Y_val),
+                                  getattr(self, 'monitor_auc_rows_test', None))]
 
 
     def network_training(self, epochs, batch_size, callbacks = None):
@@ -1002,7 +1409,9 @@ class fastANN:
             epochs=epochs,
             batch_size=batch_size,
             shuffle=self.shuffle,
-            callbacks=[self.early_stop, self.model_checkpoint] + list(callbacks or [])
+            sample_weight=getattr(self, 'sample_weight_train', None),
+            # the AUC monitor comes first: it writes val_monitored_auc into the logs read by early stopping and checkpoint
+            callbacks=self.auc_callbacks(X_val, Y_val) + [self.early_stop, self.model_checkpoint] + list(callbacks or [])
         )
 
         # save history
@@ -1111,7 +1520,8 @@ class fastANN:
         # compile = False: the saved compile configuration can refer to backend-specific classes (e.g. the PyTorch
         # Adam optimizer) that cannot be loaded with the other backend. Architecture and weights are portable, so the
         # model is loaded without it and recompiled with the current loss, metrics and learning rate.
-        self.model = self.keras.models.load_model(model_file_path, compile = False)
+        # custom objects: models with gated FAN hidden layers
+        self.model = self.keras.models.load_model(model_file_path, compile = False, custom_objects = fan_layers(self.keras))
         self.model.compile(optimizer = self.keras.optimizers.Adam(learning_rate = self.learning_rate),
                            loss = self.loss,
                            metrics = self.compile_metrics())
@@ -1398,6 +1808,7 @@ class fastANN:
         if(self.split_type == 'sequential'):
             train_size = int(len(self.X_data) * self.train_size_rate)
             test_size = len(self.X_data) - train_size
+            train_positions, test_positions = np.arange(train_size), np.arange(train_size, len(self.X_data))
 
             self.X_train = self.X_data.head(train_size)
             self.Y_train = self.Y_data.head(train_size)
@@ -1408,13 +1819,18 @@ class fastANN:
 
         if(self.split_type == 'random'):
             # train_size_rate is the TRAINING fraction, as for the sequential split
-            self.X_train, self.X_test, self.Y_train, self.Y_test = train_test_split(
-                                                                self.X_data,
-                                                                self.Y_data,
-                                                                train_size = self.train_size_rate,
-                                                                random_state = 42
-                                                               )
+            # positions are split with the same seed, so the rows are the ones of the previous versions
+            train_positions, test_positions = train_test_split(np.arange(len(self.X_data)), train_size = self.train_size_rate,
+                                                               random_state = 42)
+            self.X_train, self.X_test = self.X_data.iloc[train_positions], self.X_data.iloc[test_positions]
+            self.Y_train, self.Y_test = self.Y_data.iloc[train_positions], self.Y_data.iloc[test_positions]
             print('split_and_scale, RANDOM split')
+
+        for name, values in [('sample_weight', getattr(self, 'sample_weight', None)), ('monitor_auc_rows', getattr(self, 'monitor_auc_rows', None))]:
+            if((values is not None) and (len(values) != len(self.X_data))):
+                raise ValueError(f'{name} has {len(values)} values but X_data has {len(self.X_data)} rows.')
+        self.sample_weight_train = None if getattr(self, 'sample_weight', None) is None else self.sample_weight[train_positions]
+        self.monitor_auc_rows_test = None if getattr(self, 'monitor_auc_rows', None) is None else self.monitor_auc_rows[test_positions]
 
         # scale
         if(scaler_fit == True):
