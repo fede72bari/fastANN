@@ -16,7 +16,7 @@ What it does for you:
 - **Training best practices built in** — early stopping, checkpoint of the best epoch (reloaded at the end), training-history plots.
 - **Reproducibility and model versioning** — every training run is saved as a self-describing, timestamped set of files (model, scalers, data, hyperparameters, history) and restored with one call (see [Model versioning](#model-versioning-runs-datasets-and-hyperparameters)).
 - **Evaluation and use** — classification reports, precision/recall vs probability cutoff, gradient-based feature importance, prediction on new data with automatic scaling/descaling.
-- **TensorFlow or PyTorch** — choose the framework when creating the instance (`backend = 'tensorflow'` or `'torch'`); the same code, files and results work with both, and a model trained with one backend can be reloaded with the other.
+- **TensorFlow or PyTorch** — choose the framework when creating the instance (`backend = 'tensorflow'`, `'torch'` or `'jax'`); the same code, files and results work with both, and a model trained with one backend can be reloaded with the other.
 - **One workflow for two model families** — `fastANN` shares parameter names, method names and saved-file layout with its sister package [`fastLSTM`](https://github.com/fede72bari/fastLSTM) (recurrent networks for time series): the same code pattern trains, saves and reloads both, so they can be compared on the same data.
 
 Typical uses: tabular classification (e.g. trade/no-trade signals), regression of continuous targets, anomaly detection and feature compression with autoencoders, quick baselines before moving to sequence models.
@@ -62,7 +62,7 @@ Python 3.9+ and:
 
 | Purpose | Packages |
 |---|---|
-| Core | `keras` 3 with **one** backend: `tensorflow` (2.16+) **or** `torch`; `scikit-learn`, `pandas`, `numpy`, `scipy`, `joblib` |
+| Core | `keras` 3 with **one** backend: `tensorflow` (2.16+), `torch` **or** `jax`; `scikit-learn`, `pandas`, `numpy`, `scipy`, `joblib` |
 | Plots and notebooks | `matplotlib`, `plotly`, `ipython` |
 | Imported by the module (shared toolbox) | `xgboost`, `seaborn`, `tabulate`, `statsmodels`, `imbalanced-learn`, `deap`, `yfinance`, `pytz` |
 
@@ -138,6 +138,7 @@ print(model.backend)                                               # 'torch'
 - Keras uses **one backend per Python process**: the first instance fixes it. Asking for a different one later raises a clear error; restart the kernel to switch.
 - Saved models are portable: a model trained with TensorFlow can be reloaded with PyTorch and vice versa (`load_all` reloads the weights and recompiles the network with the saved loss, metrics and learning rate).
 - With PyTorch, create the first instance (or `import torch`) **before** anything that imports TensorFlow: with some TensorFlow/PyTorch builds, loading the Keras PyTorch backend after TensorFlow crashes Python.
+- **JAX for TPUs**: `backend = 'jax'` runs the same network on JAX, the backend to use on TPUs (e.g. Kaggle TPU v5e-8, Google Colab TPU). Models are portable across the three backends. On GPU prefer TensorFlow for LSTMs (cuDNN kernels).
 - `model.keras` is the Keras module in use; `model.model` is a regular Keras model on either backend.
 
 ### Split and scaling
@@ -219,7 +220,7 @@ The batch size is given to `network_training(epochs, batch_size)`.
 |---|---|---|---|
 | `data_storage_path` | `str` | `'\\cyPredict\\'` | Folder for every saved file; it is concatenated to file names, so it **must end with a separator** (`'./models/'`). |
 | `model_name` | `str` | `'ANN'` | Name used in every saved file name. |
-| `backend` | `'tensorflow'`, `'torch'` | `None` | Framework that runs the network (see [Choosing TensorFlow or PyTorch](#choosing-tensorflow-or-pytorch)). |
+| `backend` | `'tensorflow'`, `'torch'`, `'jax'` | `None` | Framework that runs the network (see [Choosing TensorFlow or PyTorch](#choosing-tensorflow-or-pytorch)). |
 
 ---
 

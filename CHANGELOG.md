@@ -7,6 +7,8 @@ All notable changes to `fastANN` are documented here. The format follows
 ## [2.3.0] - 2026-10-04
 
 ### Added
+- `backend = 'jax'`: the network runs on JAX too (the backend to use on TPUs); `compute_gradients` /
+  `gradient_feature_importance` support it. Models are portable across TensorFlow, PyTorch and JAX.
 - `sample_weight`: one weight per row of `X_data` (or of `X_train_s` with pre-split inputs), passed to `fit` for the
   training rows.
 - `monitor_auc` and `monitor_auc_rows`: ROC AUC of the test-set predictions computed at the end of every epoch,
